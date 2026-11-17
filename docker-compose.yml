@@ -1,0 +1,118 @@
+# RefCard 05 - gesamtes System lokal: Frontend, Backend, MariaDB und S3-kompatibler Storage (MinIO).
+#
+#   cp .env.example .env
+#   docker compose up --build --wait
+#
+# Startreihenfolge (über Healthchecks erzwungen, nicht über Wartezeiten):
+#   db + minio  ->  minio-init (legt den Bucket an)  ->  backend  ->  frontend
+name: biztrips
+
+services:
+  db:
+    # Gleiche Hauptversion wie die RDS-Instanz auf AWS.
+    image: mariadb:10.11
+    environment:
+      MARIADB_DATABASE: ${DB_NAME:-db_biztrips}
+      MARIADB_USER: ${DB_USERNAME:-biztrips}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt - zuerst .env anlegen (cp .env.example .env)}
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    ports:
+      - "127.0.0.1:${DB_PORT:-3306}:3306"
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  minio:
+    # MinIO veröffentlicht keine eigenen Images mehr auf Docker Hub; dies ist der gepflegte Build von Chainguard.
+    image: cgr.dev/chainguard/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?S3_ACCESS_KEY fehlt - zuerst .env anlegen (cp .env.example .env)}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?S3_SECRET_KEY fehlt - zuerst .env anlegen (cp .env.example .env)}
+    ports:
+      - "127.0.0.1:${S3_PORT:-9000}:9000"
+      - "127.0.0.1:${S3_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  # Einmaliger Job: legt den Bucket an, in den das Backend die Fotos schreibt.
+  minio-init:
+    image: cgr.dev/chainguard/minio:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET:-biztrips-employee-photos-local}
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        mc alias set storage http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null
+        && mc mb --ignore-existing "storage/$$S3_BUCKET"
+    restart: "no"
+
+  backend:
+    image: ${BACKEND_IMAGE:-biztrips-backend:local}
+    build:
+      context: ${BACKEND_CONTEXT:-../RefCard-03-be-SpringBootBusinessTrips}
+      args:
+        APP_VERSION: local
+        APP_COMMIT: local
+    depends_on:
+      db:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      # Gleiches Profil und gleicher S3-Code wie auf AWS - nur die Ziele sind lokal.
+      SPRING_PROFILES_ACTIVE: aws
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-db_biztrips}
+      DB_USERNAME: ${DB_USERNAME:-biztrips}
+      DB_PASSWORD: ${DB_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET:-biztrips-employee-photos-local}
+      S3_ENDPOINT: http://minio:9000
+      S3_PATH_STYLE_ACCESS: "true"
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    # Der Healthcheck (/actuator/health) ist im Image definiert.
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-biztrips-frontend:local}
+    build:
+      context: ${FRONTEND_CONTEXT:-../refcard-03-fe-react-vite}
+      args:
+        # Vite kompiliert die Backend-URL fest ins Bundle; der Browser ruft das Backend direkt auf.
+        VITE_API_BASE_URL: http://localhost:${BACKEND_PORT:-8080}/
+        APP_VERSION: local
+        APP_COMMIT: local
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    # Der Healthcheck (/healthz) ist im Image definiert.
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  minio-data:

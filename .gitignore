@@ -1,0 +1,3 @@
+# Lokale Konfiguration - wird aus .env.example erzeugt und nicht eingecheckt
+.env
+docker-compose.override.yml
