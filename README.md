@@ -13,6 +13,11 @@ Bild-Storage. Dieses Repo enthält keinen Anwendungscode, nur die Compose-Konfig
 Das Backend läuft lokal mit demselben Spring-Profil (`aws`) und demselben S3-Code wie auf AWS. Nur die
 Ziele sind andere: der MariaDB-Container statt RDS, MinIO statt des S3-Buckets.
 
+Teil der Abgabe RefCard 05 von Erik Oros und Sven Toye. Die Gesamtdokumentation steht im
+[Backend-Repo](https://github.com/thelittleerik/RefCard-03-be-SpringBootBusinessTrips/blob/main/docs/RefCard05.md).
+
+![Lokal gestartetes System mit hochgeladenen Fotos](docs/screenshots/local-app-employees.png)
+
 ## Voraussetzungen
 
 - Docker mit Compose v2 (`docker compose version`)
